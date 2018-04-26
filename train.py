@@ -10,66 +10,82 @@ import torch
 import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.transforms as transforms
 import torchvision
-from resnet import *
+#from resnet import *
 from wide_resnet import *
 import torch.backends.cudnn as cudnn
+import argparse
+import os
+from tensorboardX import SummaryWriter
 
-half = False
 args={}
-args['batch_size'] = 128
-batch_size = 128
-num_epochs = 200
+parser = argparse.ArgumentParser()
+parser.add_argument('--weight_decay', type=float, default=5e-4,
+                    help='weight decay')
+parser.add_argument('--schedule', type=int, nargs='+', default=[60, 120, 160],
+                     help='Decrease learning rate at these epochs.')
+parser.add_argument('--checkpoint', type=str, default='checkpoint')
+parser.add_argument('--model', type=str, default='resnet')
+parser.add_argument('--batch-size', type=int, default=128)
+parser.add_argument('--num-epochs', type=int, default=200)
+
+args = parser.parse_args()
 def main():
-    path = 'data/cifar-100-python/train'
-    testpath = 'data/cifar-100-python/test'
-    #trainset = Cifar100_dataset(path, sample_range=[0, 50000])
-    #valset = Cifar100_dataset(testpath)#path, sample_range=[48000, 49000])
+
+    # Dataset
+    print('Creating dataset...')
     transform_train = transforms.Compose([
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+            transforms.Normalize(np.array([125.3, 123.0, 113.9]) / 255.0, 
+                np.array([63.0, 62.1, 66.7]) / 255.0)
             ]) # meanstd transformation
 
-    transform_test = transforms.Compose([
+    transform_val= transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize((0.5071, 0.4867, 0.4408), (0.2675, 0.2565, 0.2761)),
+            transforms.Normalize(np.array([125.3, 123.0, 113.9]) / 255.0, 
+                np.array([63.0, 62.1, 66.7]) / 255.0)
             ])
     trainset = torchvision.datasets.CIFAR100(root='./data', train=True, download=True, transform=transform_train)
-    valset = torchvision.datasets.CIFAR100(root='./data', train=False, download=False, transform=transform_test)
-    train_loader = DataLoader(trainset, batch_size=args['batch_size'],
-                             shuffle=True, num_workers=4)
-    val_loader = DataLoader(valset, batch_size=args['batch_size'],
-                             shuffle=False, num_workers=4)
-    model = resnet50()
-    #model = ResNet(50,100)
-    #model = Wide_ResNet(28, 10, 0.3, 100)
-    print(model.parameters())
-    print(sum([param.nelement() for param in model.parameters()]))
+    valset = torchvision.datasets.CIFAR100(root='./data', train=False, download=True, transform=transform_val)
+    train_loader = DataLoader(trainset, batch_size=args.batch_size,
+                             shuffle=True, num_workers=4, pin_memory=True)
+    val_loader = DataLoader(valset, batch_size=args.batch_size,
+                             shuffle=False, num_workers=4, pin_memory=True)
+    
+    # Model
+    print('Loading model...')
+    model = get_model(args.model)
+    print("Number of parameters: ", sum([param.nelement() for param in model.parameters()]))
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
     model.cuda()
-    #model.apply(conv_init)
     cudnn.benchmark = True
-    if half:
-        model.half()
-    #optimizer = optim.Adam(model.parameters(), lr=1e-2, weight_decay=5e-4)
-    optimizer = optim.SGD(model.parameters(), lr=1e-1, momentum=0.9, weight_decay=5e-4)
-    scheduler = lr_scheduler.StepLR(optimizer, step_size=60, gamma=0.2)
-
+    optimizer = optim.SGD(model.parameters(), lr=1e-1, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, args.schedule, gamma=0.2)
     loss_fn = nn.CrossEntropyLoss()
+    
+    # Log
+    checkpoint = os.path.join(args.checkpoint, args.model)
+    if not os.path.exists(checkpoint):
+        os.makedirs(checkpoint)
+    log_file = os.path.join(checkpoint, 'log.json')
+    model_path = os.path.join(checkpoint, 'best_model.pt')
+    writer = SummaryWriter(checkpoint)
+    best_val_acc = -1
 
-    for epoch in range(num_epochs):
+    # Train and test
+    for epoch in range(args.num_epochs):
+        # Train
+        print('Start training epoch {}. Learning rate {}'.format(epoch, optimizer.param_groups[0]['lr']))
         model.train()
-        num_batches = len(trainset)//batch_size
+        num_batches = len(trainset)//args.batch_size
         bar = progressbar.ProgressBar(max_value=num_batches)
         running_loss = 0
         for i, (inputs, labels) in enumerate(train_loader):
             inputs, labels = (Variable(inputs.cuda()),
                               Variable(labels.cuda()))
-            if half:
-                inputs = inputs.half()
             labels = labels.squeeze()
             optimizer.zero_grad()
             outputs = model(inputs)
@@ -79,43 +95,20 @@ def main():
             loss.backward()
             optimizer.step()
             bar.update(i, force=True)
+            writer.add_scalar('Training instance loss', loss.data[0], epoch*num_batches + i)
         scheduler.step()
-        print('Epoch %d: loss %f' %(epoch, running_loss/num_batches))
+        train_loss = running_loss/num_batches
+        print('Training loss %f' %train_loss)
+        writer.add_scalar('Training loss', train_loss, epoch)
 
-        print('Validating...')
-        val_acc = 0
-        num_batches = len(trainset)//batch_size + 1
-        bar = progressbar.ProgressBar(max_value=num_batches)
-
-        #running_loss = 0
-        #for i, (inputs, labels) in enumerate(train_loader):
-        #    inputs, labels = (Variable(inputs.cuda()),
-        #                      Variable(labels.cuda()))
-        #    outputs = model(inputs)
-        #    loss = loss_fn(outputs, labels)
-        #    running_loss += loss.data[0]
-        #    outputs, labels = outputs.data, labels.data
-        #    _, preds = outputs.topk(1, 1, True, True)
-        #    preds = preds.t()
-        #    corrects = preds.eq(labels.view(1, -1).expand_as(preds))
-        #    val_acc += torch.sum(corrects)
-        ##val_acc = val_acc.data[0]/len(valset)
-        #print('train loss %f' %(running_loss/num_batches))
-        #print('train acc', val_acc/len(trainset))
-
-        print('Validating...')
+        # Validate
         model.eval()
         val_acc = 0
-        num_batches = len(valset)//batch_size + 1
-        bar = progressbar.ProgressBar(max_value=num_batches)
-
+        num_batches = len(valset)//args.batch_size + 1
         running_loss = 0
         for i, (inputs, labels) in enumerate(val_loader):
             inputs, labels = (Variable(inputs.cuda()),
                               Variable(labels.cuda()))
-            if half:
-                inputs = inputs.half()
-
             outputs = model(inputs)
             loss = loss_fn(outputs, labels)
             running_loss += loss.data[0]
@@ -124,10 +117,20 @@ def main():
             preds = preds.t()
             corrects = preds.eq(labels.view(1, -1).expand_as(preds))
             val_acc += torch.sum(corrects)
-        #val_acc = val_acc.data[0]/len(valset)
-        print('validation loss %f' %(running_loss/num_batches))
-        print('Validation acc', val_acc/len(valset))
+        val_acc = val_acc/len(valset)*100
+        val_loss = running_loss/num_batches
+        if val_acc > best_val_acc:
+            best_val_acc = val_acc
+            if torch.cuda.device_count > 1:
+                torch.save(model.module.state_dict(), model_path)
+        print('Validation loss %f' %(running_loss/num_batches))
+        print('Validation acc', val_acc)
+        writer.add_scalar('Validation loss', val_loss, epoch)
+        writer.add_scalar('Validation acc', val_acc, epoch)
         print()
+    print('Best validation acc %.2f' %best_val_acc)
+    writer.export_scalars_to_json(log_file)
+    writer.close()
 
 if __name__ == '__main__':
     main()
