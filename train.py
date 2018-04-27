@@ -1,5 +1,4 @@
 from __future__ import print_function, division
-from dataset import Cifar100_dataset
 from torch.utils.data import DataLoader
 from models import *
 from torch.autograd import Variable
