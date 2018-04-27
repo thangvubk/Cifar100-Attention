@@ -10,11 +10,10 @@ import torch
 import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.transforms as transforms
 import torchvision
-#from resnet import *
-from wide_resnet import *
 import torch.backends.cudnn as cudnn
 import argparse
 import os
+import numpy as np
 from tensorboardX import SummaryWriter
 
 args={}
@@ -27,7 +26,8 @@ parser.add_argument('--checkpoint', type=str, default='checkpoint')
 parser.add_argument('--model', type=str, default='resnet')
 parser.add_argument('--batch-size', type=int, default=128)
 parser.add_argument('--num-epochs', type=int, default=200)
-
+parser.add_argument('--learning-rate', type=float, default=5e-4)
+pretrain = True
 args = parser.parse_args()
 def main():
 
@@ -52,21 +52,7 @@ def main():
                              shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(valset, batch_size=args.batch_size,
                              shuffle=False, num_workers=4, pin_memory=True)
-    
-    # Model
-    print('Loading model...')
-    model = get_model(args.model)
-    print("Number of parameters: ", sum([param.nelement() for param in model.parameters()]))
-    if torch.cuda.device_count() > 1:
-        print("Using", torch.cuda.device_count(), "GPUs!")
-        model = nn.DataParallel(model)
-    model.cuda()
-    cudnn.benchmark = True
-    optimizer = optim.SGD(model.parameters(), lr=1e-1, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
-    scheduler = lr_scheduler.MultiStepLR(optimizer, args.schedule, gamma=0.2)
-    loss_fn = nn.CrossEntropyLoss()
-    
-    # Log
+        # Log
     checkpoint = os.path.join(args.checkpoint, args.model)
     if not os.path.exists(checkpoint):
         os.makedirs(checkpoint)
@@ -74,6 +60,23 @@ def main():
     model_path = os.path.join(checkpoint, 'best_model.pt')
     writer = SummaryWriter(checkpoint)
     best_val_acc = -1
+
+    # Model
+    print('Loading model...')
+    model = get_model(args.model)
+    print("Number of parameters: ", sum([param.nelement() for param in model.parameters()]))
+    if pretrain == True:
+        model.load_state_dict(torch.load(model_path))
+    if torch.cuda.device_count() > 1:
+        print("Using", torch.cuda.device_count(), "GPUs!")
+        model = nn.DataParallel(model)
+    model.cuda()
+    cudnn.benchmark = True
+    optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
+    scheduler = lr_scheduler.MultiStepLR(optimizer, args.schedule, gamma=0.2)
+    loss_fn = nn.CrossEntropyLoss()
+    
+
 
     # Train and test
     for epoch in range(args.num_epochs):
@@ -89,13 +92,12 @@ def main():
             labels = labels.squeeze()
             optimizer.zero_grad()
             outputs = model(inputs)
-            #print(outputs.size(), labels.size())
             loss = loss_fn(outputs, labels)
-            running_loss += loss.data[0]
+            running_loss += loss.data.item()
             loss.backward()
             optimizer.step()
             bar.update(i, force=True)
-            writer.add_scalar('Training instance loss', loss.data[0], epoch*num_batches + i)
+            writer.add_scalar('Training instance loss', loss.data.item(), epoch*num_batches + i)
         scheduler.step()
         train_loss = running_loss/num_batches
         print('Training loss %f' %train_loss)
@@ -111,13 +113,13 @@ def main():
                               Variable(labels.cuda()))
             outputs = model(inputs)
             loss = loss_fn(outputs, labels)
-            running_loss += loss.data[0]
+            running_loss += loss.data.item()
             outputs, labels = outputs.data, labels.data
             _, preds = outputs.topk(1, 1, True, True)
             preds = preds.t()
             corrects = preds.eq(labels.view(1, -1).expand_as(preds))
             val_acc += torch.sum(corrects)
-        val_acc = val_acc/len(valset)*100
+        val_acc = val_acc.item()/len(valset)*100
         val_loss = running_loss/num_batches
         if val_acc > best_val_acc:
             best_val_acc = val_acc
