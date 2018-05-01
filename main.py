@@ -15,6 +15,8 @@ import os
 import numpy as np
 from tensorboardX import SummaryWriter
 
+from ResNetCA import *
+
 args={}
 parser = argparse.ArgumentParser()
 parser.add_argument('--weight_decay', type=float, default=5e-4,
@@ -25,8 +27,8 @@ parser.add_argument('--checkpoint', type=str, default='checkpoint')
 parser.add_argument('--model', type=str, default='resnet')
 parser.add_argument('--batch-size', type=int, default=128)
 parser.add_argument('--num-epochs', type=int, default=200)
-parser.add_argument('--learning-rate', type=float, default=5e-4)
-pretrain = True
+parser.add_argument('--learning-rate', type=float, default=0.1)
+parser.add_argument('--test-only', dest='test_only', action='store_true')
 args = parser.parse_args()
 def main():
 
@@ -38,7 +40,7 @@ def main():
             transforms.ToTensor(),
             transforms.Normalize(np.array([125.3, 123.0, 113.9]) / 255.0, 
                 np.array([63.0, 62.1, 66.7]) / 255.0)
-            ]) # meanstd transformation
+            ]) 
 
     transform_val= transforms.Compose([
             transforms.ToTensor(),
@@ -51,33 +53,57 @@ def main():
                              shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(valset, batch_size=args.batch_size,
                              shuffle=False, num_workers=4, pin_memory=True)
-        # Log
+
+    # Model
     checkpoint = os.path.join(args.checkpoint, args.model)
     if not os.path.exists(checkpoint):
         os.makedirs(checkpoint)
-    log_file = os.path.join(checkpoint, 'log.json')
     model_path = os.path.join(checkpoint, 'best_model.pt')
-    writer = SummaryWriter(checkpoint)
-    best_val_acc = -1
-
-    # Model
     print('Loading model...')
     model = get_model(args.model)
+    #model = resnet50_CA()
+    #print(model)
+    # Test only
+    if args.test_only:
+        if os.path.exists(model_path):
+            model.load_state_dict(torch.load(model_path))
+        else:
+            raise Exception('Cannot find model', model_path)
     print("Number of parameters: ", sum([param.nelement() for param in model.parameters()]))
-    if pretrain == True:
-        model.load_state_dict(torch.load(model_path))
     if torch.cuda.device_count() > 1:
         print("Using", torch.cuda.device_count(), "GPUs!")
         model = nn.DataParallel(model)
     model.cuda()
     cudnn.benchmark = True
+    
+    # Test only
+    if args.test_only:
+        print('Testing...')
+        model.eval()
+        acc = 0
+        for i, (inputs, labels) in enumerate(val_loader):
+            inputs, labels = (Variable(inputs.cuda()),
+                              Variable(labels.cuda()))
+            outputs = model(inputs)
+            outputs, labels = outputs.data, labels.data
+            _, preds = outputs.topk(1, 1, True, True)
+            preds = preds.t()
+            corrects = preds.eq(labels.view(1, -1).expand_as(preds))
+            acc += torch.sum(corrects)
+        acc = acc.item()/len(valset)*100
+        print('Accuracy: %.2f' %acc)
+        return
+
+    # optim
     optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, momentum=0.9, weight_decay=args.weight_decay, nesterov=True)
     scheduler = lr_scheduler.MultiStepLR(optimizer, args.schedule, gamma=0.2)
     loss_fn = nn.CrossEntropyLoss()
     
-
-
-    # Train and test
+    # Log 
+    log_file = os.path.join(checkpoint, 'log.json')
+    writer = SummaryWriter(checkpoint)
+    best_val_acc = -1
+    # Train and val
     for epoch in range(args.num_epochs):
         # Train
         print('Start training epoch {}. Learning rate {}'.format(epoch, optimizer.param_groups[0]['lr']))
