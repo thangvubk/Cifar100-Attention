@@ -1,0 +1,7 @@
+numpy==1.14.3
+Pillow==5.1.0
+progressbar2==3.37.1
+python-utils==2.3.0
+six==1.11.0
+torch==0.4.0
+torchvision==0.2.1

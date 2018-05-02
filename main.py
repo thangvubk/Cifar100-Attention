@@ -13,9 +13,6 @@ import torch.backends.cudnn as cudnn
 import argparse
 import os
 import numpy as np
-from tensorboardX import SummaryWriter
-
-from ResNetCA import *
 
 args={}
 parser = argparse.ArgumentParser()
@@ -30,6 +27,7 @@ parser.add_argument('--num-epochs', type=int, default=200)
 parser.add_argument('--learning-rate', type=float, default=0.1)
 parser.add_argument('--test-only', dest='test_only', action='store_true')
 args = parser.parse_args()
+
 def main():
 
     # Dataset
@@ -99,9 +97,6 @@ def main():
     scheduler = lr_scheduler.MultiStepLR(optimizer, args.schedule, gamma=0.2)
     loss_fn = nn.CrossEntropyLoss()
     
-    # Log 
-    log_file = os.path.join(checkpoint, 'log.json')
-    writer = SummaryWriter(checkpoint)
     best_val_acc = -1
     # Train and val
     for epoch in range(args.num_epochs):
@@ -122,11 +117,9 @@ def main():
             loss.backward()
             optimizer.step()
             bar.update(i, force=True)
-            writer.add_scalar('Training instance loss', loss.data.item(), epoch*num_batches + i)
         scheduler.step()
         train_loss = running_loss/num_batches
         print('Training loss %f' %train_loss)
-        writer.add_scalar('Training loss', train_loss, epoch)
 
         # Validate
         model.eval()
@@ -148,16 +141,14 @@ def main():
         val_loss = running_loss/num_batches
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            if torch.cuda.device_count > 1:
+            if torch.cuda.device_count() > 1:
                 torch.save(model.module.state_dict(), model_path)
+            else:
+                torch.save(model.state_dict(), model_path)
         print('Validation loss %f' %(running_loss/num_batches))
         print('Validation acc', val_acc)
-        writer.add_scalar('Validation loss', val_loss, epoch)
-        writer.add_scalar('Validation acc', val_acc, epoch)
         print()
     print('Best validation acc %.2f' %best_val_acc)
-    writer.export_scalars_to_json(log_file)
-    writer.close()
 
 if __name__ == '__main__':
     main()
