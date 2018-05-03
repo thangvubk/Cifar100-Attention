@@ -1,4 +1,5 @@
 numpy==1.14.3
+opencv-python==3.4.0.12
 Pillow==5.1.0
 progressbar2==3.37.1
 python-utils==2.3.0

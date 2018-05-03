@@ -59,9 +59,6 @@ def main():
     model_path = os.path.join(checkpoint, 'best_model.pt')
     print('Loading model...')
     model = get_model(args.model)
-    #model = resnet50_CA()
-    #print(model)
-    # Test only
     if args.test_only:
         if os.path.exists(model_path):
             model.load_state_dict(torch.load(model_path))

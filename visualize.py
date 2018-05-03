@@ -13,10 +13,8 @@ import torch.backends.cudnn as cudnn
 import argparse
 import os
 import numpy as np
-from tensorboardX import SummaryWriter
 from grad_cam import GradCAM
 import cv2
-from ResNetCA import *
 
 args={}
 parser = argparse.ArgumentParser()
@@ -120,7 +118,7 @@ def main():
             save_image(result_path, image, sample, preds[sample], labels[sample])
         break
     acc = acc.item()/len(valset)*100
-    print('Accuracy: %.2f' %acc)
-    return
+    print('Finish!!!')
+
 if __name__ == '__main__':
     main()
