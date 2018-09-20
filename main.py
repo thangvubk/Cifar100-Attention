@@ -1,10 +1,10 @@
 from __future__ import print_function, division
 from torch.utils.data import DataLoader
-from models import *
+from model import *
 from torch.autograd import Variable
 import torch.nn as nn
 import torch.optim as optim
-import progressbar
+#import progressbar
 import torch
 import torch.optim.lr_scheduler as lr_scheduler
 import torchvision.transforms as transforms
@@ -13,6 +13,8 @@ import torch.backends.cudnn as cudnn
 import argparse
 import os
 import numpy as np
+from tqdm import tqdm
+from tensorboardX import SummaryWriter
 
 args={}
 parser = argparse.ArgumentParser()
@@ -22,6 +24,7 @@ parser.add_argument('--schedule', type=int, nargs='+', default=[60, 120, 160],
                      help='Decrease learning rate at these epochs.')
 parser.add_argument('--checkpoint', type=str, default='checkpoint')
 parser.add_argument('--model', type=str, default='resnet')
+parser.add_argument('--att_type', type=str, default='no_attention')
 parser.add_argument('--batch-size', type=int, default=128)
 parser.add_argument('--num-epochs', type=int, default=200)
 parser.add_argument('--learning-rate', type=float, default=0.1)
@@ -57,8 +60,13 @@ def main():
     if not os.path.exists(checkpoint):
         os.makedirs(checkpoint)
     model_path = os.path.join(checkpoint, 'best_model.pt')
+
     print('Loading model...')
-    model = get_model(args.model)
+    opt = {'name': args.model,
+           'att_type': args.att_type}
+
+    model = get_model(opt)
+
     if args.test_only:
         if os.path.exists(model_path):
             model.load_state_dict(torch.load(model_path))
@@ -70,6 +78,9 @@ def main():
         model = nn.DataParallel(model)
     model.cuda()
     cudnn.benchmark = True
+
+    # tensor board
+    tb = SummaryWriter(checkpoint)
     
     # Test only
     if args.test_only:
@@ -98,12 +109,12 @@ def main():
     # Train and val
     for epoch in range(args.num_epochs):
         # Train
-        print('Start training epoch {}. Learning rate {}'.format(epoch, optimizer.param_groups[0]['lr']))
+        learning_rate = optimizer.param_groups[0]['lr']
+        print('Start training epoch {}. Learning rate {}'.format(epoch, learning_rate))
         model.train()
         num_batches = len(trainset)//args.batch_size
-        bar = progressbar.ProgressBar(max_value=num_batches)
         running_loss = 0
-        for i, (inputs, labels) in enumerate(train_loader):
+        for i, (inputs, labels) in enumerate(tqdm(train_loader)):
             inputs, labels = (Variable(inputs.cuda()),
                               Variable(labels.cuda()))
             labels = labels.squeeze()
@@ -113,7 +124,6 @@ def main():
             running_loss += loss.data.item()
             loss.backward()
             optimizer.step()
-            bar.update(i, force=True)
         scheduler.step()
         train_loss = running_loss/num_batches
         print('Training loss %f' %train_loss)
@@ -145,6 +155,13 @@ def main():
         print('Validation loss %f' %(running_loss/num_batches))
         print('Validation acc', val_acc)
         print()
+
+        #update tensorboard
+        tb.add_scalar('Learning rate', learning_rate, epoch)
+        tb.add_scalar('Train loss', train_loss, epoch)
+        tb.add_scalar('Val loss', val_loss, epoch)
+        tb.add_scalar('Val acc', val_acc, epoch)
+
     print('Best validation acc %.2f' %best_val_acc)
 
 if __name__ == '__main__':
