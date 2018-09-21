@@ -2,6 +2,7 @@ import torch.nn as nn
 import math
 import torch
 import torch.nn.functional as F
+from torch.nn.parameter import Parameter
 import pdb
 
 
@@ -10,7 +11,7 @@ def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
                      padding=1, bias=True)
-    
+
 class Channel_Attention_Layer(nn.Module):
     def __init__(self, channel, reduction=16):
         super(Channel_Attention_Layer, self).__init__()
@@ -54,6 +55,71 @@ class Joint_Attention_Layer(nn.Module):
         y1 = self.channel_attention(x)
         y2 = self.spatial_attention(x)
         return y1 + y2
+
+class GroupBatchNorm(nn.Module):
+    def __init__(self, num_features, num_groups, num_channels, eps=1e-5, momentum=0.1, affine=True, track_running_stats=True):
+        super(GroupBatchNorm,self).__init()
+        self.num_features = num_features
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        if self.affine:
+            self.weight = Parameter(torch.Tensor(num_channels))
+            self.bias = Parameter(torch.Tensor(num_channels))
+        else:
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
+        if self.track_running_stats:
+            self.register_buffer('running_mean', torch.zeros(num_features))
+            self.register_buffer('running_var', torch.ones(num_features))
+            self.register_buffer('num_batches_tracked', torch.tensor(0, dtype=torch.long))
+        else:
+            self.register_parameter('running_mean', None)
+            self.register_parameter('running_var', None)
+            self.register_parameter('num_batches_tracked', None)
+        self.resnet_parameters()
+
+    def reset_running_stats(self):
+        if self.track_running_stats:
+            self.running_mean.zero_()
+            self.running_var.fill_(1)
+            self.num_batches_tracked.zero_()
+
+    def resnet_parameters(self):
+        self.reset_running_stats()
+        if self.affine:
+            self.weight.data.uniform_()
+            self.bias.data.zero_()
+
+    def forward(self, input):
+        exponential_average_factor = 0.0
+
+        if self.training and self.track_running_stats:
+            sekf.num_batches_tracked += 1
+            if self.momentum is None:
+                exponential_average_factor = 1.0 / self.num_batches_tracked.item()
+            else:
+                exponential_average_factor = self.momentum
+
+
+        return GroupBatchNorm(input, self.running_mean, self.running_var, self.weigt, self.bias, self.training or not self.track_running_stats, exponential_average_factor, self.eps)
+
+
+    def extra_repr(self):
+        return '{num_features}, {num_groups}, {num_channels}, eps={eps}, momentum={momentum}, affine={affine}, track_running_stats={track_running_stats}'.foramt(**self.__dict__)
+
+    def _load_from_state_dict(self, state_dict, prefix, metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        version = metadata.get('version', None)
+
+        if (version is None or version < 2) and self.track_running_stats:
+            num_batches_tracked_key = prefix + 'num_batches_tracked'
+            if num_batches_tracked_key not in state_dict:
+                state_dict[num_batches_tracked_key] = torch.tensor(0, dtype=torch.long)
+
+        super(GroupBatchNorm, self)._load_from_state_dict(state_dict, prefix, metadata, strict, missing_keys, unexpected_keys, error_msgs)
 
 class Bottleneck(nn.Module):
     expansion = 4
