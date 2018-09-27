@@ -24,7 +24,9 @@ parser.add_argument('--schedule', type=int, nargs='+', default=[60, 120, 160],
                      help='Decrease learning rate at these epochs.')
 parser.add_argument('--checkpoint', type=str, default='checkpoint')
 parser.add_argument('--model', type=str, default='resnet')
-parser.add_argument('--att_type', type=str, default='no_attention')
+parser.add_argument('--t_att', type=str, default='no_att')
+parser.add_argument('--t_norm', type=str, default='bn')
+
 parser.add_argument('--batch-size', type=int, default=128)
 parser.add_argument('--num-epochs', type=int, default=200)
 parser.add_argument('--learning-rate', type=float, default=0.1)
@@ -63,9 +65,11 @@ def main():
 
     print('Loading model...')
     opt = {'name': args.model,
-           'att_type': args.att_type}
+           't_att': args.t_att,
+           't_norm': args.t_norm}
 
     model = get_model(opt)
+    print(model)
 
     if args.test_only:
         if os.path.exists(model_path):

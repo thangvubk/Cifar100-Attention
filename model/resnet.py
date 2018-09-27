@@ -4,8 +4,6 @@ import torch
 import torch.nn.functional as F
 import pdb
 
-
-
 def conv3x3(in_planes, out_planes, stride=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride,
@@ -47,18 +45,18 @@ class Spatial_Attention_Layer(nn.Module):
 class Joint_Attention_Layer(nn.Module):
     def __init__(self, channel):
         super(Joint_Attention_Layer, self).__init__()
-        self.channel_attention = Channel_Attention_Layer(channel)
-        self.spatial_attention = Spatial_Attention_Layer(channel)
+        self.channel_att = Channel_Attention_Layer(channel)
+        self.spatial_att = Spatial_Attention_Layer(channel)
 
     def forward(self, x):
-        y1 = self.channel_attention(x)
-        y2 = self.spatial_attention(x)
+        y1 = self.channel_att(x)
+        y2 = self.spatial_att(x)
         return y1 + y2
 
 class Bottleneck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, attention_type='no_attention'):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, t_att='no_att'):
         super(Bottleneck, self).__init__()
         self.conv1 = nn.Conv2d(inplanes, planes, kernel_size=1, bias=True)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -71,16 +69,16 @@ class Bottleneck(nn.Module):
         self.downsample = downsample
         self.stride = stride
         self.sigmoid = nn.Sigmoid()
-        if attention_type == 'channel_attention':
-            self.attention = Channel_Attention_Layer(planes*4)
-        elif attention_type == 'spatial_attention':
-            self.attention = Spatial_Attention_Layer(planes*4)
-        elif attention_type == 'joint_attention':
-            self.attention = Joint_Attention_Layer(planes*4)
-        elif attention_type == 'no_attention':
-            self.attention = None
+        if t_att == 'channel_att':
+            self.att = Channel_Attention_Layer(planes*4)
+        elif t_att == 'spatial_att':
+            self.att = Spatial_Attention_Layer(planes*4)
+        elif t_att == 'joint_att':
+            self.att = Joint_Attention_Layer(planes*4)
+        elif t_att == 'no_att':
+            self.att = None
         else:
-            raise Exception('Unknown attention type')
+            raise Exception('Unknown att type')
 
     def forward(self, x):
         residual = x
@@ -96,10 +94,10 @@ class Bottleneck(nn.Module):
         out = self.conv3(out)
         out = self.bn3(out)
 
-        if self.attention is not None:
-            attention = self.attention(out)
-            attention = self.sigmoid(attention)
-            out = out*attention
+        if self.att is not None:
+            att = self.att(out)
+            att = self.sigmoid(att)
+            out = out*att
 
         if self.downsample is not None:
             residual = self.downsample(x)
@@ -109,29 +107,53 @@ class Bottleneck(nn.Module):
 
         return out
 
+class Norm(nn.Module):
+    def __init__(self, name, n_feats):
+        super(Norm, self).__init__()
+
+        assert name in ['bn', 'gn', 'gbn', 'none']
+
+        if name == 'bn':
+            self.norm = nn.BatchNorm2d(n_feats)
+        elif name == 'gn':
+            self.norm = nn.GroupNorm(32, n_feats)
+        elif name == 'gbn':
+            self.norm = nn.Sequential(nn.GroupNorm(32, n_feats, affine=False),
+                                      nn.BatchNorm2d(n_feats))
+        elif name == 'none':
+            pass
+
+        self.name = name
+
+    def forward(self, x):
+        if self.name == 'none':
+            return x
+        else:
+            return self.norm(x)
+
 class BasicBlock(nn.Module):
     expansion = 1
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, attention_type='no_attention', size=None):
+    def __init__(self, inplanes, planes, stride=1, downsample=None, t_norm='bn', t_att='no_att', size=None):
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
+        self.bn1 = Norm(t_norm, planes)
         self.relu = nn.ReLU(inplace=True)
         self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
+        self.bn2 = Norm(t_norm, planes)
         self.downsample = downsample
         self.stride = stride
         self.sigmoid = nn.Sigmoid()
-        if attention_type == 'channel_attention':
-            self.attention = Channel_Attention_Layer(planes, reduction=4)
-        elif attention_type == 'spatial_attention':
-            self.attention = Spatial_Attention_Layer(planes, size, reduction=8)
-        elif attention_type == 'joint_attention':
-            self.attention = Joint_Attention_Layer(planes)
-        elif attention_type == 'no_attention':
-            self.attention = None
+        if t_att == 'channel_att':
+            self.att = Channel_Attention_Layer(planes, reduction=4)
+        elif t_att == 'spatial_att':
+            self.att = Spatial_Attention_Layer(planes, size, reduction=8)
+        elif t_att == 'joint_att':
+            self.att = Joint_Attention_Layer(planes)
+        elif t_att == 'no_att':
+            self.att = None
         else:
-            raise Exception('Unknown attention type')
+            raise Exception('Unknown att type')
 
     def forward(self, x):
         residual = x
@@ -143,10 +165,10 @@ class BasicBlock(nn.Module):
         out = self.conv2(out)
         out = self.bn2(out)
 
-        if self.attention is not None:
-            attention = self.attention(out)
-            attention = self.sigmoid(attention)
-            out = out*attention
+        if self.att is not None:
+            att = self.att(out)
+            att = self.sigmoid(att)
+            out = out*att
 
         if self.downsample is not None:
             residual = self.downsample(x)
@@ -157,18 +179,20 @@ class BasicBlock(nn.Module):
         return out
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers, attention_type='no_attention', num_classes=100):
+    def __init__(self, block, layers, t_norm='bn', t_att='no_att', num_classes=100):
         self.inplanes = 64
-        self.attention_type = attention_type
+        self.size = 32
+        self.t_norm = t_norm
+        #self.t_att = t_att
+
         super(ResNet, self).__init__()
-        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=1, padding=3,
-                               bias=True)
+        self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=1, padding=3, bias=True)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1, attention_type='no_attention', size=32)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=1, attention_type='no_attention', size=32)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, attention_type=self.attention_type, size=16)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, attention_type=self.attention_type, size=8)
+        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1, t_att='no_att')
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=1, t_att='no_att')
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, t_att=t_att)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, t_att=t_att)
         self.avgpool = nn.AvgPool2d(8, stride=1)
         self.fc = nn.Linear(512 * block.expansion, num_classes)
         for m in self.modules():
@@ -179,22 +203,24 @@ class ResNet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _make_layer(self, block, planes, blocks, stride=1, attention_type='no_attention', size=None):
+    def _make_layer(self, block, planes, blocks, stride=1, t_att='no_att'):
         downsample = None
+        if stride == 2: 
+            self.size = self.size//2
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
                 nn.Conv2d(self.inplanes, planes * block.expansion,
                           kernel_size=1, stride=stride, bias=True),
-                nn.BatchNorm2d(planes * block.expansion),
+                Norm(self.t_norm, planes * block.expansion),
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, attention_type=attention_type, size=size))
+        layers.append(block(self.inplanes, planes, stride, downsample, size=self.size, t_norm=self.t_norm, t_att=t_att))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, attention_type=attention_type, size=size))
-        # append attention layer to the stage
-        #layers.append(block(self.inplanes, planes, attention_type=attention_type, size=size))
+            layers.append(block(self.inplanes, planes, size=self.size, t_norm=self.t_norm, t_att=t_att))
+        # append att layer to the stage
+        #layers.append(block(self.inplanes, planes, t_att=t_att, size=size))
 
         return nn.Sequential(*layers)
 
@@ -215,18 +241,18 @@ class ResNet(nn.Module):
         return x
 
 class Fishnet(nn.Module):
-    def __init__(self, block, layers, attention_type='no_attention', num_classes=100):
+    def __init__(self, block, layers, t_att='no_att', num_classes=100):
         self.inplanes = 64
-        self.attention_type = attention_type
+        self.t_att = t_att
         super(Fishnet, self).__init__()
 
         self.conv1 = nn.Conv2d(3, 64, kernel_size=7, stride=1, padding=3, bias=True)
         self.bn1 = nn.BatchNorm2d(64)
         self.relu = nn.ReLU(inplace=True)
-        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1, attention_type='no_attention', size=32)
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=1, attention_type='no_attention', size=32)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, attention_type=self.attention_type, size=16)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, attention_type=self.attention_type, size=8)
+        self.layer1 = self._make_layer(block, 64,  layers[0], stride=1, t_att='no_att', size=32)
+        self.layer2 = self._make_layer(block, 128, layers[1], stride=1, t_att='no_att', size=32)
+        self.layer3 = self._make_layer(block, 256, layers[2], stride=2, t_att=self.t_att, size=16)
+        self.layer4 = self._make_layer(block, 512, layers[3], stride=2, t_att=self.t_att, size=8)
 
         self.top_down1 = nn.Conv2d(512, 256, 1)
         self.top_down2 = nn.Conv2d(256, 256, 3, padding=1)
@@ -249,7 +275,7 @@ class Fishnet(nn.Module):
                 m.weight.data.fill_(1)
                 m.bias.data.zero_()
 
-    def _make_layer(self, block, planes, blocks, stride=1, attention_type='no_attention', size=None):
+    def _make_layer(self, block, planes, blocks, stride=1, t_att='no_att', size=None):
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -259,12 +285,12 @@ class Fishnet(nn.Module):
             )
 
         layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample, attention_type=attention_type, size=size))
+        layers.append(block(self.inplanes, planes, stride, downsample, t_att=t_att, size=size))
         self.inplanes = planes * block.expansion
         for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes, attention_type=attention_type, size=size))
-        # append attention layer to the stage
-        #layers.append(block(self.inplanes, planes, attention_type=attention_type, size=size))
+            layers.append(block(self.inplanes, planes, t_att=t_att, size=size))
+        # append att layer to the stage
+        #layers.append(block(self.inplanes, planes, t_att=t_att, size=size))
 
         return nn.Sequential(*layers)
 
@@ -298,28 +324,28 @@ class Fishnet(nn.Module):
         return x
 
 def ca_resnet50(**kwargs):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], 'channel_attention', **kwargs)
+    model = ResNet(Bottleneck, [3, 4, 6, 3], 'channel_att', **kwargs)
     return model
 
 
 def sa_resnet50(**kwargs):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], 'spatial_attention', **kwargs)
+    model = ResNet(Bottleneck, [3, 4, 6, 3], 'spatial_att', **kwargs)
     return model
 
 def ja_resnet50(**kwargs):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], 'joint_attention', **kwargs)
+    model = ResNet(Bottleneck, [3, 4, 6, 3], 'joint_att', **kwargs)
     return model
 
 def resnet50(pretrained=False, **kwargs):
-    model = ResNet(Bottleneck, [3, 4, 6, 3], 'no_attention', **kwargs)
+    model = ResNet(Bottleneck, [3, 4, 6, 3], 'no_att', **kwargs)
     return model
 
 def resnet18(pretrained=False, **kwargs):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], 'no_attention', **kwargs)
+    model = ResNet(BasicBlock, [2, 2, 2, 2], 'no_att', **kwargs)
     return model
 
 def ca_resnet18(**kwargs):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], 'channel_attention', **kwargs)
+    model = ResNet(BasicBlock, [2, 2, 2, 2], 'channel_att', **kwargs)
     return model
 
 def resnet18(**kwargs):
